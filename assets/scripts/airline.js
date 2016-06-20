@@ -162,6 +162,7 @@ function airline_init() {
   airline_load("CESSNA");
   airline_load("CFG");
   airline_load("CFS");
+  airline_load("CNF");
   airline_load("CPA");
   airline_load("CPZ");
   airline_load("CSN");
@@ -193,7 +194,9 @@ function airline_init() {
   airline_load("HAL");
   airline_load("HDA");
   airline_load("IAD");
+  airline_load("IBB");
   airline_load("IBE");
+  airline_load("IBS");
   airline_load("IGO");
   airline_load("INC");
   airline_load("JAI");
