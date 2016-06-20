@@ -166,7 +166,7 @@
       },
       "draw": [["LTE53", "52LTE", "GOMSU", "KOSIB", "LORPO"], ["LTE04", "LTE12", "LZR", "ELNAN", "SOMOB", "KOSIB", "LORPO"]]
     },
-    "LARYS" {
+    "LARYS": {
       "icao": "LARYS",
       "name": "Larys",
       "suffix": {"21":"1N", "03":"1M"},
