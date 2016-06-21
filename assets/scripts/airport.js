@@ -1169,6 +1169,7 @@ function airport_init() {
   airport_load("ekch");
   airport_load("engm");
   airport_load("espa");
+  airport_load("gcrr");
   airport_load("kbos");
   airport_load("kdca");
   airport_load("kjfk");
