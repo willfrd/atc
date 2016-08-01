@@ -60,6 +60,11 @@ zlsa.atc.ArrivalBase = Fiber.extend(function(base) {
         for (var i=0; i<options.fixes.length; i++)
           this.fixes.push({fix: options.fixes[i]});
       }
+
+      // Pre-load the airlines
+      $.each(this.airlines, function (i, data) {
+        airline_get(data[0].split('/')[0]);
+      });
     },
     /** Stop this arrival stream
      */
@@ -412,6 +417,10 @@ zlsa.atc.DepartureBase = Fiber.extend(function(base) {
       for(var i in params) {
         if(options[params[i]]) this[params[i]] = options[params[i]];
       }
+      // Pre-load the airlines
+      $.each(this.airlines, function (i, data) {
+        airline_get(data[0].split('/')[0]);
+      });
     },
     /** Stop this departure stream
      */
@@ -531,9 +540,11 @@ zlsa.atc.DepartureWave = zlsa.atc.DepartureCyclic.extend(function(base) {
 
 var Runway=Fiber.extend(function(base) {
   return {
-    init: function(options, end) {
+    init: function(options, end, airport) {
       if(!options) options={};
+      options.airport     = airport;
       this.angle          = null;
+      this.elevation      = 0;
       this.delay          = 2;
       this.gps            = [];
       this.ils            = { enabled : true,
@@ -574,14 +585,20 @@ var Runway=Fiber.extend(function(base) {
       if(!gs_gradient) gs_gradient = this.ils.gs_gradient;
       distance = Math.max(0, distance);
       var rise = tan(abs(gs_gradient));
-      return rise * distance * 3280;
+      return this.elevation + (rise * distance * 3280);
     },
     parse: function(data, end) {
+      this.airport = data.airport;
       if(data.delay) this.delay = data.delay[end];
       if(data.end) {
         var thisSide  = new Position(data.end[end], data.reference_position, data.magnetic_north);
         var farSide   = new Position(data.end[(end==0)?1:0], data.reference_position, data.magnetic_north);
         this.gps      = [thisSide.latitude, thisSide.longitude];       // GPS latitude and longitude position
+        if (thisSide.elevation != null)
+          this.elevation = thisSide.elevation;
+        if ((this.elevation == 0) && (this.airport.elevation != 0)) {
+          this.elevation = this.airport.elevation;
+        }
         this.position = thisSide.position; // relative position, based on center of map
         this.length   = vlen(vsub(farSide.position, thisSide.position));
         this.midfield = vscale(vadd(thisSide.position, farSide.position), 0.5);
@@ -609,6 +626,7 @@ var Airport=Fiber.extend(function() {
       this.icao     = null;
       this.radio    = null;
       this.level    = null;
+      this.elevation = 0;
       this.runways  = [];
       this.runway   = null;
       this.fixes    = {};
@@ -655,6 +673,8 @@ var Airport=Fiber.extend(function() {
     },
     parse: function(data) {
       if(data.position) this.position = new Position(data.position);
+      if (this.position && (this.position.elevation != null))
+        this.elevation = this.position.elevation;
       if(data.magnetic_north) this.magnetic_north = radians(data.magnetic_north);
         else this.magnetic_north = 0;
       if(data.name) this.name   = data.name;
@@ -699,8 +719,8 @@ var Airport=Fiber.extend(function() {
         for(var i in data.runways) {
           data.runways[i].reference_position = this.position;
           data.runways[i].magnetic_north = this.magnetic_north;
-          this.runways.push( [new Runway(data.runways[i], 0),
-                              new Runway(data.runways[i], 1)]);
+          this.runways.push( [new Runway(data.runways[i], 0, this),
+                              new Runway(data.runways[i], 1, this)]);
         }
       }
 
@@ -806,11 +826,12 @@ var Airport=Fiber.extend(function() {
               //setup secondary runway subobject
               var r1  = this.runways[rwy1][rwy1end];
               var r2  = this.runways[rwy2][rwy2end];
+              var offset = getOffset(r1, r2.position, r1.angle);
               this.metadata.rwy[r1.name][r2.name] = {};
 
               // generate this runway pair's relationship data
-              this.metadata.rwy[r1.name][r2.name].lateral_dist =
-                distance2d(r1.position, r2.position);
+              this.metadata.rwy[r1.name][r2.name].lateral_dist = abs(offset[1]);
+              this.metadata.rwy[r1.name][r2.name].straight_dist = abs(offset[2]);
               this.metadata.rwy[r1.name][r2.name].converging =
                 raysIntersect(r1.position, r1.angle, r2.position, r2.angle);
               this.metadata.rwy[r1.name][r2.name].parallel =
@@ -938,7 +959,8 @@ var Airport=Fiber.extend(function() {
       }
     },
     loadTerrain: function() {
-      $.getJSON('assets/airports/terrain/' + this.icao.toLowerCase() + '.geojson')
+      zlsa.atc.loadAsset({url: 'assets/airports/terrain/' + this.icao.toLowerCase() + '.geojson',
+                         immediate: true})
         .done(function (data) {
           try {
             log('Parsing terrain');
@@ -964,7 +986,8 @@ var Airport=Fiber.extend(function() {
 
       update_run(false);
       this.loading = true;
-      $.getJSON("assets/airports/"+this.icao.toLowerCase()+".json")
+      zlsa.atc.loadAsset({url: "assets/airports/"+this.icao.toLowerCase()+".json",
+                          immediate: true})
         .done(function (data) {
           this.parse(data);
           if (this.has_terrain)
@@ -1132,7 +1155,7 @@ var Airport=Fiber.extend(function() {
       // Gather fixes used by STARs
       if(this.hasOwnProperty("stars")) {
         for(var s in this.stars) {
-          if(this.stars[s].hasOwnProperty("transtitions")) { // transtitions portion
+          if(this.stars[s].hasOwnProperty("transitions")) { // transitions portion
             for(var t in this.stars[s].transitions)
               for(var i in this.stars[s].transitions[t]) {
                 if(typeof this.stars[s].transitions[t][i] == "string")
@@ -1196,9 +1219,11 @@ function airport_init() {
   airport_load('eddm', "beginner", "Franz Josef Strauß International Airport");
   airport_load('eddt', "medium", "Berlin Tegel Airport");
   airport_load('egcc', "hard", "Manchester Airport");
+  airport_load('eggw', "medium", "London Luton Airport")
   airport_load('egkk', "easy", "London Gatwick Airport");
   airport_load('eglc', "medium", "London City Airport");
   airport_load('egll', "hard", "London Heathrow Airport");
+  airport_load('egnm', "beginner", "Leeds Bradford International Airport");
   airport_load('eham', "medium", "Amsterdam Airport Schiphol");
   airport_load('eidw', "easy", "Dublin Airport");
   airport_load('einn', "easy", "Shannon Airport");
@@ -1208,10 +1233,11 @@ function airport_init() {
   airport_load('gcrr', "easy", "Lanzarote Airport");
   airport_load('kbos', "medium", "Boston Logan International Airport");
   airport_load('kdca', "medium", "Reagan National Airport");
+  airport_load('kiad', "hard", "Washington-Dulles International Airport");
   airport_load('kjfk', "hard", "John F Kennedy International Airport &#9983");
   airport_load('klax90', "medium", "Los Angeles International Airport 1990");
   airport_load('klax', "medium", "Los Angeles International Airport");
-  airport_load('kmia', "medium", "Miami International Airport &#9983");
+  airport_load('kmia', "hard", "Miami International Airport &#9983");
   airport_load('kmsp', "hard", "Minneapolis/St. Paul International Airport &#9983");
   airport_load('ksan', "easy", "San Diego International Airport");
   airport_load('ksea', "medium", "Seattle-Tacoma International Airport &#9983");
@@ -1220,7 +1246,9 @@ function airport_init() {
   airport_load('ltba', "hard", "Atatürk International Airport &#9983");
   airport_load('omaa', "medium", "Abu Dhabi International Airport");
   airport_load('omdb', "hard", "Dubai International Airport");
+  airport_load('osdi', "easy",  "Damascus International Airport");
   airport_load('othh', "hard", "Doha Hamad International Airport");
+  airport_load('rjtt', "hard", "Tokyo Haneda International Airport");
   airport_load('saez', "medium", "Aeropuerto Internacional Ministro Pistarini");
   airport_load('sbgl', "beginner", "Aeroporto Internacional Tom Jobim");
   airport_load('sbgr', "beginner", "Aeroporto Internacional de São Paulo/Guarulhos");
@@ -1232,6 +1260,7 @@ function airport_init() {
   airport_load('wiii', "medium", "Soekarno-Hatta International Airport");
   airport_load('wimm', "easy", "Kuala Namu International Airport");
   airport_load('wmkp', "medium", "Pulau Pinang International Airport");
+  airport_load('wmkk', "hard", "Kuala Lumpur International Airport (KLIA)")
   airport_load('wsss', "hard", "Singapore Changi International Airport");
 }
 
